@@ -1,5 +1,6 @@
 package com.google.edwmigration.dbsync.common;
 
+import com.codahale.metrics.Timer;
 import com.google.edwmigration.dbsync.proto.BlockLocation;
 import com.google.edwmigration.dbsync.proto.Checksum;
 import com.google.edwmigration.dbsync.proto.Instruction;
@@ -45,9 +46,6 @@ public class InstructionGenerator {
     for (Checksum c : checksums) {
       checksumMap.computeIfAbsent(c.getWeakChecksum(), k -> new ArrayList<>()).add(c);
     }
-    if (DEBUG) {
-      logger.debug("Checksum map contains {} keys", checksumMap.size());
-    }
 
     // TODO: We could use Literal.MAX_LENGTH here, but that would make testing a bit more fiddly.
     int blockSize = checksums.isEmpty() ? this.blockSize : checksums.get(0).getBlockLength();
@@ -63,51 +61,59 @@ public class InstructionGenerator {
       STREAM:
       for (; ; ) {
         // This is the fast-path.
-        rollingBlockLength = rollingChecksum.reset(i);
+        try (Timer.Context reset = RsyncMetrics.reset.time()) {
+          rollingBlockLength = rollingChecksum.reset(i);
+        }
         if (DEBUG) {
           logger.debug("Fast-path reset read {} bytes", rollingBlockLength);
         }
         BYTE:
         for (; ; ) {
-          Collection<? extends Checksum> cc = checksumMap.get(rollingChecksum.getWeakHashCode());
+          Collection<? extends Checksum> cc;
+
+          try (Timer.Context getFromMap = RsyncMetrics.getFromMap.time()) {
+            cc = checksumMap.get(rollingChecksum.getWeakHashCode());
+          }
+
           // Grant me the serenity to accept the Optional<T>s I cannot change,
           // The courage to change the ones I can avoid without getting fired,
           // And the wisdom to know the difference.
           MATCH:
           if (cc != null) {
-            byte[] strongHashCode = rollingChecksum.getStrongHashCode().asBytes();
-            for (Checksum c : cc) {
-              if (Arrays.equals(c.getStrongChecksum().toByteArray(), strongHashCode)) {
-                if (literalBufferLength > 0) {
-                  if (DEBUG) {
-                    logger.debug("Emitting pre-match literal");
+            try (Timer.Context compareAndWrite = RsyncMetrics.compareAndWriteInstruction.time()) {
+              byte[] strongHashCode = rollingChecksum.getStrongHashCode().asBytes();
+              for (Checksum c : cc) {
+                if (Arrays.equals(c.getStrongChecksum().toByteArray(), strongHashCode)) {
+                  if (literalBufferLength > 0) {
+                    out.accept(newLiteralInstruction(literalBuffer, literalBufferLength));
+                    literalBufferLength = 0;
                   }
-                  out.accept(newLiteralInstruction(literalBuffer, literalBufferLength));
-                  literalBufferLength = 0;
+                  Instruction insn = Instruction.newBuilder()
+                      .setBlockLocation(BlockLocation.newBuilder()
+                          .setBlockOffset(c.getBlockOffset())
+                          .setBlockLength(c.getBlockLength()))
+                      .build();
+                  out.accept(insn);
+                  continue STREAM;
                 }
-                Instruction insn = Instruction.newBuilder()
-                    .setBlockLocation(BlockLocation.newBuilder()
-                        .setBlockOffset(c.getBlockOffset())
-                        .setBlockLength(c.getBlockLength()))
-                    .build();
-                out.accept(insn);
-                continue STREAM;
               }
             }
           }
-          int b = i.read();
-          if (b < 0) {
-            break STREAM;
-          }
-          if (literalBufferLength == literalBuffer.length) {
-            // We're about to run out of RollingChecksum buffer.
-            if (DEBUG) {
-              logger.debug("Emitting overflow literal");
+          try (Timer.Context rollByte = RsyncMetrics.rollByte.time()) {
+            int b = i.read();
+            if (b < 0) {
+              break STREAM;
             }
-            out.accept(newLiteralInstruction(literalBuffer, literalBufferLength));
-            literalBufferLength = 0;
+            if (literalBufferLength == literalBuffer.length) {
+              // We're about to run out of RollingChecksum buffer.
+              if (DEBUG) {
+                logger.debug("Emitting overflow literal");
+              }
+              out.accept(newLiteralInstruction(literalBuffer, literalBufferLength));
+              literalBufferLength = 0;
+            }
+            literalBuffer[literalBufferLength++] = rollingChecksum.roll((byte) b);
           }
-          literalBuffer[literalBufferLength++] = rollingChecksum.roll((byte) b);
         }
       }
 

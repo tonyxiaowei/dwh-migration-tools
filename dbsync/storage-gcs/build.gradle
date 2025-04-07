@@ -6,4 +6,5 @@ dependencies {
     api project(':dbsync:common')
 	api libs.google.cloud.storage
 	testImplementation testFixtures(project(':dbsync:common'))
+    implementation 'io.dropwizard.metrics:metrics-core:4.2.0'
 }

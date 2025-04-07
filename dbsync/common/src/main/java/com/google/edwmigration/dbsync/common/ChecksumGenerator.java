@@ -11,6 +11,7 @@ import java.io.InputStream;
 import org.checkerframework.checker.index.qual.NonNegative;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
+import com.codahale.metrics.Timer;
 
 public class ChecksumGenerator {
 
@@ -30,6 +31,7 @@ public class ChecksumGenerator {
 
   public void generate(ChecksumConsumer<IOException> out, ByteSource in) throws IOException {
     // This deliberately throws if size is not Present.
+    logger.info("starting checksum file generation");
     Optional<Long> dataSizeOptional = in.sizeIfKnown();
     if (!dataSizeOptional.isPresent()) {
       throw new IllegalArgumentException("ServerData must have a known size.");
@@ -53,29 +55,28 @@ public class ChecksumGenerator {
         }
 
         // If someone changes the size of the ByteSource underneath us, this might throw EOFException.
-        rollingChecksum.reset(i);
-        int weakHashCode = rollingChecksum.getWeakHashCode();
-        HashCode strongHashCode = rollingChecksum.getStrongHashCode();
+        try (Timer.Context context = RsyncMetrics.reset.time()) {
+          rollingChecksum.reset(i);
+        }
+        try (Timer.Context loop = RsyncMetrics.checksumLoop.time()) {
+          int weakHashCode = rollingChecksum.getWeakHashCode();
+          HashCode strongHashCode = rollingChecksum.getStrongHashCode();
 
-        if (DEBUG) {
-          HashCode _strongHashCode = RollingChecksumImpl.STRONG_HASH_FUNCTION.hashBytes(dataArray,
-              Ints.checkedCast(offset), blockSize);
-          if (!strongHashCode.equals(_strongHashCode)) {
-            throw new IllegalStateException(
-                "Bad hash code at " + offset + "..+" + blockSize + ": " + strongHashCode + " != "
-                    + _strongHashCode);
+          Checksum c = Checksum.newBuilder()
+              .setBlockOffset(offset)
+              .setBlockLength(blockSize)
+              .setWeakChecksum(weakHashCode)
+              .setStrongChecksum(ByteString.copyFrom(strongHashCode.asBytes()))
+              .build();
+          try (Timer.Context context1 = RsyncMetrics.checksumFlush.time()) {
+            out.accept(c);
           }
         }
 
-        Checksum c = Checksum.newBuilder()
-            .setBlockOffset(offset)
-            .setBlockLength(blockSize)
-            .setWeakChecksum(weakHashCode)
-            .setStrongChecksum(ByteString.copyFrom(strongHashCode.asBytes()))
-            .build();
-        out.accept(c);
       }
     }
+    logger.info("Finished checksum file generation");
+
   }
 
   public interface ChecksumConsumer<X extends Exception> {

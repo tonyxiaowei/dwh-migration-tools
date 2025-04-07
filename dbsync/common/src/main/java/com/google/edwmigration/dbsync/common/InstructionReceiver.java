@@ -1,5 +1,6 @@
 package com.google.edwmigration.dbsync.common;
 
+import com.codahale.metrics.Timer;
 import com.google.edwmigration.dbsync.proto.BlockLocation;
 import com.google.edwmigration.dbsync.proto.Instruction;
 import com.google.common.base.Preconditions;
@@ -62,8 +63,11 @@ public class InstructionReceiver implements Closeable {
         break;
       case DATA:
         flushCopy();
+
         ByteString data = instruction.getData();
-        data.writeTo(out);
+        try (Timer.Context copyLiteral = RsyncMetrics.copyLiteralData.time()) {
+          data.writeTo(out);
+        }
         break;
       default:
         throw new IllegalArgumentException("Unknown instruction type " + instruction.getClass());

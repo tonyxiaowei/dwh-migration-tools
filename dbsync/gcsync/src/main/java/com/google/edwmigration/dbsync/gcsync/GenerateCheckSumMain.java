@@ -6,6 +6,8 @@ import com.google.common.io.ByteSink;
 import com.google.common.io.ByteSource;
 import com.google.edwmigration.dbsync.common.ChecksumGenerator;
 import com.google.edwmigration.dbsync.common.DefaultArguments;
+import com.google.edwmigration.dbsync.common.MetricsReporter;
+import com.google.edwmigration.dbsync.common.RsyncMetrics;
 import com.google.edwmigration.dbsync.storage.gcs.GcsStorage;
 import java.io.OutputStream;
 import java.net.URI;
@@ -20,6 +22,15 @@ public class GenerateCheckSumMain {
   private static final Logger logger = Logger.getLogger("gcsync");
 
   public static void main(String[] args) throws Exception {
+    long startTime = System.currentTimeMillis();
+
+    RsyncMetrics.metrics.register("checksum-rest", RsyncMetrics.reset);
+    RsyncMetrics.metrics.register("checksum-io", RsyncMetrics.readBytes);
+    RsyncMetrics.metrics.register("checksum-flush", RsyncMetrics.checksumFlush);
+    RsyncMetrics.metrics.register("checksum-hashing", RsyncMetrics.checksumLoop);
+
+    MetricsReporter.startConsoleReporter();
+
     Arguments arguments = new Arguments(args);
     GcsStorage gcsStorage = new GcsStorage(
         arguments.getOptions().valueOf(arguments.projectOptionSpec));
@@ -40,12 +51,18 @@ public class GenerateCheckSumMain {
       ByteSink byteSink = gcsStorage.newByteSink(
           new URI(tmpBucket).resolve(Util.getCheckSumFileName(file)));
       try (OutputStream bufferedOutputStream = byteSink.openBufferedStream()) {
+
         checksumGenerator.generate(checksum ->
             checksum.writeDelimitedTo(bufferedOutputStream), byteSource);
+
         logger.log(Level.INFO,
             String.format("Finished generating check sum for: %s", file));
+
       }
     }
+
+    long endTime = System.currentTimeMillis();
+    logger.log(Level.INFO, String.format("Checksum generated in %d ms", endTime - startTime));
   }
 
   private static class Arguments extends DefaultArguments {

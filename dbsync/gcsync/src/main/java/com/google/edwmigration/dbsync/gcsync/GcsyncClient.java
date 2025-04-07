@@ -8,6 +8,7 @@ import com.google.cloud.run.v2.ExecutionTemplate;
 import com.google.cloud.run.v2.Job;
 import com.google.cloud.run.v2.JobName;
 import com.google.cloud.run.v2.JobsClient;
+import com.google.cloud.run.v2.ResourceRequirements;
 import com.google.cloud.run.v2.RunJobRequest;
 import com.google.cloud.run.v2.TaskTemplate;
 import com.google.cloud.storage.Blob;
@@ -139,7 +140,10 @@ public class GcsyncClient {
     uploadFilesToRsyncList();
     uploadJar();
 
+    long startTime = System.currentTimeMillis();
     executeMainOnCloudRun(Constants.GENERATE_CHECK_SUM_MAIN);
+    long endTime = System.currentTimeMillis();
+    logger.log(Level.INFO, String.format("Finished checksum in %d ms", endTime - startTime));
   }
 
   private void uploadJar() throws URISyntaxException, IOException {
@@ -173,7 +177,7 @@ public class GcsyncClient {
         new URI(tmpBucket).resolve(Constants.JAR_FILE_NAME));
 
     String command = String.format(
-        "java -cp %s "
+        "java -Xmx4g -cp %s "
             + String.format("%s ", mainClassPath)
             + "--project %s "
             + "--tmp_bucket %s "
@@ -202,9 +206,16 @@ public class GcsyncClient {
           List<Checksum> checksums = getChecksumsFromFile(inputStream);
           ByteSource fileInput = com.google.common.io.Files.asByteSource(file.toFile());
 
+          long startTime = System.currentTimeMillis();
+
           instructionGenerator.generate(instruction ->
                   instruction.writeDelimitedTo(instructionSink)
               , fileInput, checksums);
+          long endTime = System.currentTimeMillis();
+
+          logger.log(Level.INFO, String.format("Finished instruction generations %d milliseconds.",
+              endTime - startTime));
+
         }
       }
 
@@ -214,7 +225,10 @@ public class GcsyncClient {
 
   private void reconStructFiles()
       throws IOException, ExecutionException, InterruptedException, URISyntaxException {
+    long startTime = System.currentTimeMillis();
     executeMainOnCloudRun(Constants.RECONSTRUCT_FILE_MAIN);
+    long endTime = System.currentTimeMillis();
+    logger.log(Level.INFO, String.format("Finished reconstruction in %d ms", endTime - startTime));
   }
 
   private void uploadRemainingFiles() throws URISyntaxException, IOException {
@@ -229,8 +243,10 @@ public class GcsyncClient {
                 TaskTemplate.newBuilder().
                     setTimeout(cloudRunTaskTimeout).
                     addContainers(Container.
-                        newBuilder().
-                        setImage("docker.io/getbamba/google-cloud-sdk-java:latest")
+                        newBuilder()
+                        .setImage("docker.io/getbamba/google-cloud-sdk-java:latest")
+                        .setResources(ResourceRequirements.newBuilder().putLimits("memory", "6Gi")
+                            .putLimits("cpu", "2"))
                         .addCommand("/bin/sh")
                         .addAllArgs(Arrays.asList("-c", command)).build())
                     .build())
@@ -251,7 +267,7 @@ public class GcsyncClient {
     future.get();
 
     // Delete the job to prevent it from spamming cloud jobs list
-    jobsClient.deleteJobAsync(jobName).get();
+    // jobsClient.deleteJobAsync(jobName).get();
   }
 
   private static List<Checksum> getChecksumsFromFile(InputStream inputStream) throws IOException {

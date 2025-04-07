@@ -1,8 +1,10 @@
 package com.google.edwmigration.dbsync.storage.gcs;
 
+import com.codahale.metrics.Timer;
 import com.google.cloud.ReadChannel;
 import com.google.common.base.Optional;
 import com.google.common.io.ByteSink;
+import com.google.edwmigration.dbsync.common.RsyncMetrics;
 import com.google.edwmigration.dbsync.common.storage.AbstractRemoteByteSource;
 import com.google.edwmigration.dbsync.common.storage.Slice;
 import com.google.cloud.storage.BlobId;
@@ -10,6 +12,8 @@ import com.google.cloud.storage.Storage;
 import com.google.common.base.MoreObjects;
 import com.google.common.base.MoreObjects.ToStringHelper;
 import com.google.common.io.ByteSource;
+import com.google.protobuf.ByteString;
+import java.io.BufferedInputStream;
 import java.io.EOFException;
 import java.io.IOException;
 import java.io.InputStream;
@@ -66,6 +70,12 @@ public class GcsByteSource extends AbstractRemoteByteSource {
   }
 
   @Override
+  public InputStream openBufferedStream() throws IOException {
+    LOG.info("opening buffered stream");
+    return new BufferedInputStream(openStream(), 8 * 1024 * 1024);
+  }
+
+  @Override
   public long copyTo(OutputStream outputStream) throws IOException {
     Slice slice = getSlice();
     if (slice == null) {
@@ -73,24 +83,33 @@ public class GcsByteSource extends AbstractRemoteByteSource {
     }
 
     if (slice.getOffset() < inputStreamCache.getCurrentOffset()) {
-      if (DEBUG) {
-        LOG.info(String.format("Target offset %d smaller than current offset %d, reopen stream",
-            slice.getOffset(), inputStreamCache.currentOffset));
+      try (Timer.Context reopenAndSeek = RsyncMetrics.reopenAndSeek.time()) {
+        if (DEBUG) {
+          LOG.info(String.format("Target offset %d smaller than current offset %d, reopen stream",
+              slice.getOffset(), inputStreamCache.currentOffset));
+        }
+        inputStreamCache.getSourceStream().close();
+        inputStreamCache.setSourceStream(Channels.newInputStream(storage.reader(blobId)));
+        inputStreamCache.setCurrentOffset(0);
       }
-      inputStreamCache.getSourceStream().close();
-      inputStreamCache.setSourceStream(Channels.newInputStream(storage.reader(blobId)));
-      inputStreamCache.setCurrentOffset(0);
     }
 
     // Skip forward to the desired start.
     long toSkip = slice.getOffset() - inputStreamCache.getCurrentOffset();
-    skip(toSkip);
-    return copy(slice.getLength(), outputStream);
+    try (Timer.Context skip = RsyncMetrics.skip.time()) {
+      skip(toSkip);
+    }
+    long copied;
+    try (Timer.Context copyData = RsyncMetrics.copyData.time()) {
+      copied = copy(slice.getLength(), outputStream);
+    }
+
+    return copied;
   }
 
   @Override
   public long copyTo(ByteSink byteSink) throws IOException {
-    try(OutputStream outputStream = byteSink.openBufferedStream()){
+    try (OutputStream outputStream = byteSink.openBufferedStream()) {
       return copyTo(outputStream);
     }
   }
@@ -120,7 +139,7 @@ public class GcsByteSource extends AbstractRemoteByteSource {
 
   private long copy(long copyLength, OutputStream out) throws IOException {
     // Now copy exactly copyLength bytes.
-    byte[] buffer = new byte[8192];
+    byte[] buffer = new byte[32 * 8192];
     long remaining = copyLength;
     while (remaining > 0) {
       int bytesToRead = (int) Math.min(buffer.length, remaining);
@@ -129,7 +148,9 @@ public class GcsByteSource extends AbstractRemoteByteSource {
         throw new EOFException("Unexpected end of stream while copying " + copyLength
             + " bytes starting at offset " + getSlice().getOffset());
       }
-      out.write(buffer, 0, read);
+      try (Timer.Context copyData = RsyncMetrics.flushData.time()) {
+        ByteString.copyFrom(buffer).writeTo(out);
+      }
       remaining -= read;
       inputStreamCache.setCurrentOffset(inputStreamCache.getCurrentOffset() + read);
     }

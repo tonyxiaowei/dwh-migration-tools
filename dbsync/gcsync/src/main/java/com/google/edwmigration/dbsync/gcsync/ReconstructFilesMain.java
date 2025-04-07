@@ -9,6 +9,8 @@ import com.google.common.io.ByteSink;
 import com.google.common.io.ByteSource;
 import com.google.edwmigration.dbsync.common.DefaultArguments;
 import com.google.edwmigration.dbsync.common.InstructionReceiver;
+import com.google.edwmigration.dbsync.common.MetricsReporter;
+import com.google.edwmigration.dbsync.common.RsyncMetrics;
 import com.google.edwmigration.dbsync.proto.Instruction;
 import com.google.edwmigration.dbsync.storage.gcs.GcsStorage;
 import java.io.InputStream;
@@ -25,6 +27,16 @@ public class ReconstructFilesMain {
   private static final Logger logger = Logger.getLogger("gcsync");
 
   public static void main(String[] args) throws Exception {
+    long startTime = System.currentTimeMillis();
+
+    RsyncMetrics.metrics.register("reconstruct-skip", RsyncMetrics.skip);
+    RsyncMetrics.metrics.register("reconstruct-reopenAdnSeek", RsyncMetrics.reopenAndSeek);
+    RsyncMetrics.metrics.register("reconstruct-copyData", RsyncMetrics.copyData);
+    RsyncMetrics.metrics.register("reconstruct-copyLiteral", RsyncMetrics.copyLiteralData);
+    RsyncMetrics.metrics.register("reconstruct-flushdata", RsyncMetrics.flushData);
+
+    MetricsReporter.startConsoleReporter();
+
     Arguments arguments = new Arguments(args);
     GcsStorage gcsStorage = new GcsStorage(arguments.getOptions().valueOf(
         arguments.projectOptionSpec));
@@ -57,12 +69,15 @@ public class ReconstructFilesMain {
 
         gcsStorage.copyFile(tempFile, sourceFile);
         gcsStorage.delete(tempFile);
-        deleteStagingFiles(gcsStorage, tmpBucket, file);
+        // deleteStagingFiles(gcsStorage, tmpBucket, file);
       }
-      gcsStorage.delete(new URI(tmpBucket).resolve(Constants.FILES_TO_RSYNC_FILE_NAME));
+      // gcsStorage.delete(new URI(tmpBucket).resolve(Constants.FILES_TO_RSYNC_FILE_NAME));
 
       logger.log(Level.INFO, String.format("Finished reconstructing file: %s", file));
     }
+
+    long endTime = System.currentTimeMillis();
+    logger.log(Level.INFO, String.format("File reconstructed in %d", endTime - startTime));
   }
 
   private static void deleteStagingFiles(GcsStorage gcsStorage, String bucket, String file)

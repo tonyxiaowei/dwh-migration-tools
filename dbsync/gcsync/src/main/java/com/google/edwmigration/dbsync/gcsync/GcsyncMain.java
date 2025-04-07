@@ -6,6 +6,8 @@ import com.google.cloud.run.v2.JobsClient;
 import com.google.cloud.run.v2.JobsSettings;
 import com.google.edwmigration.dbsync.common.DefaultArguments;
 import com.google.edwmigration.dbsync.common.InstructionGenerator;
+import com.google.edwmigration.dbsync.common.MetricsReporter;
+import com.google.edwmigration.dbsync.common.RsyncMetrics;
 import com.google.edwmigration.dbsync.storage.gcs.GcsStorage;
 import com.google.protobuf.Duration;
 import com.google.protobuf.util.Durations;
@@ -19,6 +21,15 @@ import joptsimple.OptionSpec;
 public class GcsyncMain {
 
   public static void main(String[] args) throws IOException, ParseException {
+    RsyncMetrics.metrics.register("generate-io", RsyncMetrics.readBytes);
+    RsyncMetrics.metrics.register("generate-getFromMap", RsyncMetrics.getFromMap);
+    RsyncMetrics.metrics.register("generate-compareAndWrite", RsyncMetrics.compareAndWriteInstruction);
+    RsyncMetrics.metrics.register("generate-rollbyte", RsyncMetrics.rollByte);
+    RsyncMetrics.metrics.register("generate-reset", RsyncMetrics.reset);
+
+
+    MetricsReporter.startConsoleReporter();
+
     Arguments arguments = new Arguments(args);
     String project = arguments.getOptions().valueOf(arguments.projectOptionSpec);
     Duration cloudRunTaskTimeout = Durations.parse(

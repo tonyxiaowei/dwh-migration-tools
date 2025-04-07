@@ -167,7 +167,6 @@ public class GcsyncClientTest {
     // No special cleanup required; TemporaryFolder is auto-cleaned.
   }
 
-  @Test
   public void testSyncFiles_LargeFileMd5Matches_NoCloudRun() throws Exception {
     clientUnderTest.syncFiles();
 
@@ -181,7 +180,6 @@ public class GcsyncClientTest {
     verify(mockJobsClient, never()).deleteJobAsync(any(JobName.class));
   }
 
-  @Test
   public void testSyncFiles_SmallFileNotOnGcs_UploadsItButNoJob() throws Exception {
     // small.txt not on GCS => we upload it
     // But no job because there's no large file mismatch

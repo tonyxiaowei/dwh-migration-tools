@@ -1,5 +1,6 @@
 package com.google.edwmigration.dbsync.common;
 
+import com.codahale.metrics.Timer;
 import com.google.common.annotations.VisibleForTesting;
 import com.google.common.base.MoreObjects;
 import com.google.common.base.Preconditions;
@@ -8,11 +9,9 @@ import com.google.common.hash.HashFunction;
 import com.google.common.hash.Hasher;
 import com.google.common.hash.Hashing;
 import com.google.common.io.ByteStreams;
-import com.google.common.primitives.Ints;
 import java.io.IOException;
 import java.io.InputStream;
 import java.util.Arrays;
-import javax.annotation.CheckReturnValue;
 import org.checkerframework.checker.index.qual.NonNegative;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -21,7 +20,7 @@ import org.slf4j.LoggerFactory;
 // We could start with a=1, like Adler32, but it would complicate remove, a little.
 public class RollingChecksumImpl {
 
-  public static final HashFunction STRONG_HASH_FUNCTION = Hashing.sha256();
+  public static final HashFunction STRONG_HASH_FUNCTION = Hashing.md5();
 
   private static final Logger logger = LoggerFactory.getLogger(RollingChecksumImpl.class);
   private static final boolean DEBUG = false;
@@ -89,7 +88,10 @@ public class RollingChecksumImpl {
   public int reset(InputStream data) throws IOException {
     int a = 0;
     int b = 0;
-    int length = ByteStreams.read(data, block, 0, block.length);
+    int length;
+    try(Timer.Context context = RsyncMetrics.readBytes.time()) {
+      length = ByteStreams.read(data, block, 0, block.length);
+    }
     for (int i = 0, len = length; i < len; i++) {
       int v = F(block[i]);
       a = (a + v);

@@ -16,6 +16,8 @@ dependencies {
     implementation libs.commons.lang3
     implementation libs.google.cloud.run
 
+    implementation 'io.dropwizard.metrics:metrics-core:4.2.0'
+
     // Test dependencies
     testImplementation 'junit:junit:4.13.2'
     testImplementation 'org.mockito:mockito-core:4.11.0'
